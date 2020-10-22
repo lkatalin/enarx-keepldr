@@ -164,3 +164,8 @@ fn echo() {
     }
     run_test("echo", 0, input.as_slice(), input.as_slice(), None);
 }
+
+#[test]
+fn myerror() {
+    run_test("myerror", 0, None, None, None);
+}

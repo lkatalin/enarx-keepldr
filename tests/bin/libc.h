@@ -113,3 +113,9 @@ int is_enarx() {
         default: return 0;
     }
 }
+
+ssize_t myerror(void) {
+//    uncomment below to experience test failure
+//    errno = ENOSYS;
+    return -1;
+}
