@@ -86,6 +86,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "byteorder"
+version = "1.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08c48aae112d48ed9f069b33538ea9e3e90aa263cfa3d1c24309612b1f7472de"
+
+[[package]]
 name = "bytes"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -207,6 +213,7 @@ name = "enarx-keepldr"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "byteorder",
  "cc",
  "codicon",
  "colorful",
