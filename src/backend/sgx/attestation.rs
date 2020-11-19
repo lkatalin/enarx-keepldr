@@ -3,6 +3,8 @@
 // Credit to: https://github.com/fortanix/rust-sgx/tree/master/aesm-client
 // for examples of AESM Requests.
 
+use colour::*;
+
 use crate::protobuf::aesm_proto::{
     Request, Request_GetQuoteRequest, Request_InitQuoteRequest, Response,
     Response_GetQuoteResponse, Response_InitQuoteResponse,
@@ -33,6 +35,8 @@ fn get_ti(out_buf: &mut [u8]) -> Result<usize, std::io::Error> {
         }
     };
 
+    cyan_ln!("HOST: received request for target info from shim\n");
+
     // Set an Init Quote Request
     let mut req = Request::new();
     let mut msg = Request_InitQuoteRequest::new();
@@ -49,6 +53,8 @@ fn get_ti(out_buf: &mut [u8]) -> Result<usize, std::io::Error> {
     let req_len = (buf_wrtr.len() - size_of::<u32>()) as u32;
     (&mut buf_wrtr[0..size_of::<u32>()]).write_u32::<NativeEndian>(req_len)?;
 
+    cyan_ln!("HOST: sending initQuoteRequest to AESM daemon\n");
+
     // Send Request to AESM daemon
     stream.write_all(&buf_wrtr)?;
     stream.flush()?;
@@ -63,12 +69,16 @@ fn get_ti(out_buf: &mut [u8]) -> Result<usize, std::io::Error> {
     let res: Response_InitQuoteResponse = pb_msg.unwrap().take_initQuoteRes();
     let ti = res.get_targetInfo();
 
+    cyan_ln!("HOST: received target info from AESM daemon:\n\n");
+    green_ln!("{:?}\n\n", ti);
+
     assert_eq!(
         ti.len(),
         out_buf.len(),
         "Unable to copy TargetInfo to buffer"
     );
 
+    cyan_ln!("HOST: sending target info back to shim\n");
     out_buf.copy_from_slice(ti);
     Ok(ti.len())
 }
@@ -91,6 +101,8 @@ fn get_quote(report: &[u8], out_buf: &mut [u8]) -> Result<usize, std::io::Error>
         }
     };
 
+    cyan_ln!("HOST: received request for quote info from shim\n");
+
     // Set a Get Quote Request
     let mut req = Request::new();
     let mut msg = Request_GetQuoteRequest::new();
@@ -109,6 +121,8 @@ fn get_quote(report: &[u8], out_buf: &mut [u8]) -> Result<usize, std::io::Error>
     }
     let req_len = (buf_wrtr.len() - size_of::<u32>()) as u32;
     (&mut buf_wrtr[0..size_of::<u32>()]).write_u32::<NativeEndian>(req_len)?;
+
+    cyan_ln!("HOST: sending getQuoteRequest to AESM daemon\n");
 
     // Send Request to AESM daemon
     stream.write_all(&buf_wrtr)?;
@@ -131,8 +145,13 @@ fn get_quote(report: &[u8], out_buf: &mut [u8]) -> Result<usize, std::io::Error>
         return Err(Error::new(ErrorKind::InvalidData, "No data in Quote"));
     }
 
+    cyan_ln!("HOST: received quote from AESM daemon:\n\n");
+    green_ln!("{:?}\n\n", quote);
+
     assert_eq!(quote.len(), out_buf.len(), "Unable to copy Quote to buffer");
     out_buf.copy_from_slice(&quote);
+
+    cyan_ln!("HOST: sending quote back to shim\n");
 
     Ok(quote.len())
 }

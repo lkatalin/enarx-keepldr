@@ -391,6 +391,7 @@ impl<'a> SyscallHandler for Handler<'a> {
         buf_len: libc::size_t,
     ) -> sallyport::Result {
         self.trace("get_att", 0);
+        let _ = self.write_str("\nSHIM: received get_attestation() request from code layer\n\n");
 
         // Used internally for buffer size to host when getting TargetInfo
         const REPORT_LEN: usize = 512;
@@ -402,6 +403,7 @@ impl<'a> SyscallHandler for Handler<'a> {
         let c = self.new_cursor();
         let (_, shim_buf_ptr) = c.alloc::<u8>(buf_len).or(Err(libc::EMSGSIZE))?;
         let req = request!(SYS_ENARX_GETATT => 0, 0, shim_buf_ptr.as_ptr(), REPORT_LEN);
+        let _ = self.write_str("SHIM: requesting target info from host\n\n");
         unsafe { self.proxy(req)? };
 
         // Retrieve TargetInfo from sallyport block and call EREPORT to
@@ -411,6 +413,9 @@ impl<'a> SyscallHandler for Handler<'a> {
         let c = self.new_cursor();
         c.copy_into_slice(buf_len, ti.as_mut(), ti_len)
             .or(Err(libc::EFAULT))?;
+
+        let _ = self.write_str("SHIM: received target info from host\n\n");
+
 
         // Cannot generate a Report from dummy values
         if ti.eq(&SGX_DUMMY_TI) {
@@ -435,6 +440,7 @@ impl<'a> SyscallHandler for Handler<'a> {
         target_info.attributes = att;
         let data = ReportData([0u8; 64]);
         let report: Report = unsafe { target_info.get_report(&data) };
+        let _ = self.write_str("SHIM: generated report\n\n");
 
         // Request Quote from host
         let report_len = core::mem::size_of::<Report>();
@@ -442,11 +448,15 @@ impl<'a> SyscallHandler for Handler<'a> {
         let (_, report_bytes, _) = unsafe { report_slice.align_to::<u8>() };
         assert_eq!(report_bytes.len(), report_len);
 
+        let _ = self.write_str("SHIM: requesting quote from host\n\n");
+        
         let c = self.new_cursor();
         let (c, shim_nonce_ptr) = c.copy_from_slice(&report_bytes).or(Err(libc::EMSGSIZE))?;
         let (_, shim_buf_ptr) = c.alloc::<u8>(buf_len).or(Err(libc::EMSGSIZE))?;
         let req = request!(SYS_ENARX_GETATT => shim_nonce_ptr.as_ptr(), report_bytes.len(), shim_buf_ptr.as_ptr(), buf_len);
         let result = unsafe { self.proxy(req)? };
+        
+        let _ = self.write_str("SHIM: received quote from host\n\n");
 
         // Pass Quote back to code layer in buf
         let c = self.new_cursor();
@@ -460,6 +470,7 @@ impl<'a> SyscallHandler for Handler<'a> {
         c.copy_into_slice(buf_len, buf.as_mut(), result_len)
             .or(Err(libc::EFAULT))?;
 
+        let _ = self.write_str("SHIM: relaying quote to code layer\n\n");
         let rep: sallyport::Reply = Ok([result[0], SGX_TECH.into()]).into();
         sallyport::Result::from(rep)
     }
