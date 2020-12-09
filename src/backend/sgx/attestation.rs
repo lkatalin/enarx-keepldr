@@ -157,6 +157,7 @@ fn get_quote(report: &[u8], out_buf: &mut [u8]) -> Result<usize, std::io::Error>
 
     assert_eq!(quote.len(), out_buf.len(), "Unable to copy Quote to buffer");
     out_buf.copy_from_slice(&quote);
+    println!("quote len: {:?}", quote.len());
     println!("quote:\n {:?}", quote);
     std::process::exit(0);
 
