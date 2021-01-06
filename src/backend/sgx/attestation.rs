@@ -4,40 +4,38 @@
 // for examples of AESM Requests.
 
 use crate::protobuf::aesm_proto::{
-    Request, Request_GetQuoteRequest, Request_InitQuoteRequest, Response,
-    Response_GetQuoteResponse, Response_InitQuoteResponse,
+    Request, Request_SelectAttKeyIDRequest, Request_GetQuoteExRequest, Request_InitQuoteExRequest, Response, Response_SelectAttKeyIDResponse, Response_GetQuoteExResponse, Response_InitQuoteExResponse,
 };
 use crate::syscall::{SGX_DUMMY_QUOTE, SGX_DUMMY_TI, SGX_QUOTE_SIZE, SGX_TI_SIZE};
 
 use std::io::{Error, ErrorKind, Read, Write};
 use std::mem::size_of;
+use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
+use std::vec::Vec;
 
 use protobuf::Message;
 
 const AESM_SOCKET: &str = "/var/run/aesmd/aesm.socket";
 
-/// Fills the Target Info of the QE into the output buffer specified and
-/// returns the number of bytes written.
-fn get_ti(out_buf: &mut [u8]) -> Result<usize, Error> {
-    assert_eq!(out_buf.len(), SGX_TI_SIZE, "Invalid size of output buffer");
+fn get_ak_id(out_buf: &mut [u8]) -> Result<Vec<u8>, Error> {
 
     // If unable to connect to the AESM daemon, return dummy value
     let mut stream = match UnixStream::connect(AESM_SOCKET) {
         Ok(s) => s,
         Err(_) => {
             out_buf.copy_from_slice(&SGX_DUMMY_TI);
-            return Ok(SGX_TI_SIZE);
+            return Ok(Vec::new());
         }
     };
 
-    // Set an Init Quote Request
+    // Select an Attestation Key
     let mut req = Request::new();
-    let mut msg = Request_InitQuoteRequest::new();
+    let mut msg = Request_SelectAttKeyIDRequest::new();
     msg.set_timeout(1_000_000);
-    req.set_initQuoteReq(msg);
-
+    req.set_selectAttKeyIDReq(msg);
+    
     // Set up Writer
     let mut buf_wrtr = vec![0u8; size_of::<u32>()];
     match req.write_to_writer(&mut buf_wrtr) {
@@ -45,7 +43,7 @@ fn get_ti(out_buf: &mut [u8]) -> Result<usize, Error> {
         Err(e) => {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
-                format!("Invalid Init Quote Request: {:#?}", e),
+                format!("Invalid Select Att Key ID Request: {:#?}", e),
             ));
         }
     }
@@ -65,10 +63,90 @@ fn get_ti(out_buf: &mut [u8]) -> Result<usize, Error> {
     let mut res_bytes = vec![0; res_len as usize];
     stream.read_exact(&mut res_bytes)?;
 
+    // Parse Response and extract AttKeyID
+    let mut pb_msg: Response = protobuf::parse_from_bytes(&res_bytes)?;
+    let mut res: Response_SelectAttKeyIDResponse = pb_msg.take_selectAttKeyIDRes();
+
+    // The error code is zero here, but that's not supposed to be one of the error codes?
+    if res.has_errorCode() && (res.get_errorCode() != 1u32) && (res.get_errorCode() != 0u32) {
+        panic!("Received error code {:?} in Select Att Key ID Response", res.get_errorCode());
+    }
+
+    let attkeyid = res.take_selected_att_key_id();
+
+    assert!(attkeyid != &[]);
+    Ok(attkeyid)
+
+//    stream.flush()?;
+
+//    stream.shutdown(Shutdown::Both);
+
+//    assert_eq!(0, 7);
+
+}
+
+/// Fills the Target Info of the QE into the output buffer specified and
+/// returns the number of bytes written.
+fn get_ti(out_buf: &mut [u8], akid: Vec<u8>) -> Result<usize, Error> {
+    assert_eq!(out_buf.len(), SGX_TI_SIZE, "Invalid size of output buffer");
+
+    // If unable to connect to the AESM daemon, return dummy value
+    let mut stream = match UnixStream::connect(AESM_SOCKET) {
+        Ok(s) => s,
+        Err(_) => {
+            out_buf.copy_from_slice(&SGX_DUMMY_TI);
+            return Ok(SGX_TI_SIZE);
+        }
+    };
+
+    // Set an Init Quote Ex Request
+    let mut req = Request::new();
+    let mut msg = Request_InitQuoteExRequest::new();
+    msg.set_timeout(1_000_000);
+    msg.set_b_pub_key_id(false);
+    msg.set_att_key_id(akid);
+    req.set_initQuoteExReq(msg);
+
+    // Set up Writer
+    let mut buf_wrtr = vec![0u8; size_of::<u32>()];
+    match req.write_to_writer(&mut buf_wrtr) {
+        Ok(_) => {}
+        Err(e) => {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!("Invalid Init Quote Ex Request: {:#?}", e),
+            ));
+        }
+    }
+
+    let req_len = (buf_wrtr.len() - size_of::<u32>()) as u32;
+    (&mut buf_wrtr[0..size_of::<u32>()]).copy_from_slice(&req_len.to_le_bytes());
+
+//    assert_eq!(0, 8);
+    
+    // Send Request to AESM daemon
+    stream.write_all(&buf_wrtr)?;
+    stream.flush()?;
+
+    // Receive Response
+    let mut res_len_bytes = [0u8; 4];
+    stream.read_exact(&mut res_len_bytes)?;
+    let res_len = u32::from_le_bytes(res_len_bytes);
+
+    let mut res_bytes = vec![0; res_len as usize];
+    stream.read_exact(&mut res_bytes)?;
+
     // Parse Response and extract TargetInfo
     let mut pb_msg: Response = protobuf::parse_from_bytes(&res_bytes)?;
-    let res: Response_InitQuoteResponse = pb_msg.take_initQuoteRes();
-    let ti = res.get_targetInfo();
+    let res: Response_InitQuoteExResponse = pb_msg.take_initQuoteExRes();
+
+    if res.has_errorCode() && (res.get_errorCode() != 1u32 && res.get_errorCode() != 0u32) {
+        panic!("Init Quote Ex Reponse has error code: {}", res.get_errorCode());
+    }
+
+//    assert_eq!(res.get_errorCode(), 1u32);
+
+    let ti = res.get_target_info();
 
     assert_eq!(
         ti.len(),
@@ -98,15 +176,15 @@ fn get_quote(report: &[u8], out_buf: &mut [u8]) -> Result<usize, std::io::Error>
         }
     };
 
+    // Get Quote Size
+
     // Set a Get Quote Request
     let mut req = Request::new();
-    let mut msg = Request_GetQuoteRequest::new();
+    let mut msg = Request_GetQuoteExRequest::new();
     msg.set_report(report[0..432].to_vec());
-    msg.set_quote_type(0); // TODO: Fix this value
-    msg.set_spid([0u8; 16].to_vec()); // TODO: Fix this value
-    msg.set_buf_size(1244); // TODO: FIx this value
+    msg.set_buf_size(1277);
     msg.set_timeout(1_000_000);
-    req.set_getQuoteReq(msg);
+    req.set_getQuoteExReq(msg);
 
     // Set up Writer
     let mut buf_wrtr = vec![0u8; size_of::<u32>()];
@@ -115,7 +193,7 @@ fn get_quote(report: &[u8], out_buf: &mut [u8]) -> Result<usize, std::io::Error>
         Err(e) => {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
-                format!("Invalid Get Quote Request: {:#?}", e),
+                format!("Invalid Get Quote Ex Request: {:#?}", e),
             ));
         }
     }
@@ -137,7 +215,7 @@ fn get_quote(report: &[u8], out_buf: &mut [u8]) -> Result<usize, std::io::Error>
 
     // Parse Response and extract Quote
     let mut pb_msg: Response = protobuf::parse_from_bytes(&res_bytes)?;
-    let res: Response_GetQuoteResponse = pb_msg.take_getQuoteRes();
+    let res: Response_GetQuoteExResponse = pb_msg.take_getQuoteExRes();
     if res.get_errorCode() != 0 {
         return Err(Error::new(
             ErrorKind::InvalidData,
@@ -176,7 +254,9 @@ pub fn get_attestation(
     let out_buf: &mut [u8] = unsafe { from_raw_parts_mut(buf as *mut u8, buf_len) };
 
     if nonce == 0 {
-        get_ti(out_buf)
+        let akid = get_ak_id(out_buf).unwrap();
+        assert!(!akid.is_empty());
+        get_ti(out_buf, akid)
     } else {
         let report: &[u8] = unsafe { from_raw_parts(nonce as *const u8, nonce_len) };
         get_quote(report, out_buf)
