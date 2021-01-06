@@ -4,7 +4,7 @@
 // for examples of AESM Requests.
 
 use crate::protobuf::aesm_proto::{
-    Request, Request_SelectAttKeyIDRequest, Request_GetQuoteExRequest, Request_InitQuoteExRequest, Response, Response_SelectAttKeyIDResponse, Response_GetQuoteExResponse, Response_InitQuoteExResponse,
+    Request, Request_SelectAttKeyIDRequest, Request_InitQuoteExRequest, Request_GetQuoteSizeExRequest, Request_GetQuoteExRequest, Response, Response_SelectAttKeyIDResponse, Response_InitQuoteExResponse, Response_GetQuoteSizeExResponse, Response_GetQuoteExResponse,
 };
 use crate::syscall::{SGX_DUMMY_QUOTE, SGX_DUMMY_TI, SGX_QUOTE_SIZE, SGX_TI_SIZE};
 
@@ -158,9 +158,74 @@ fn get_ti(out_buf: &mut [u8], akid: Vec<u8>) -> Result<usize, Error> {
     Ok(ti.len())
 }
 
+fn get_quote_size(akid: Vec<u8>) -> Result<usize, std::io::Error> {
+    
+    // If unable to connect to the AESM daemon, return dummy value
+    let mut stream = match UnixStream::connect(AESM_SOCKET) {
+        Ok(s) => s,
+        Err(_) => {
+            return Ok(7);
+        }
+    };
+
+    // Set a Get Quote Size Ex Request
+    let mut req = Request::new();
+    let mut msg = Request_GetQuoteSizeExRequest::new();
+    msg.set_att_key_id(akid);
+    msg.set_timeout(1_000_000);
+    req.set_getQuoteSizeExReq(msg);
+
+    // Set up Writer
+    let mut buf_wrtr = vec![0u8; size_of::<u32>()];
+    match req.write_to_writer(&mut buf_wrtr) {
+        Ok(_) => {}
+        Err(e) => {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!("Invalid Get Quote Size Ex Request: {:#?}", e),
+            ));
+        }
+    }
+
+    let req_len = (buf_wrtr.len() - size_of::<u32>()) as u32;
+    (&mut buf_wrtr[0..size_of::<u32>()]).copy_from_slice(&req_len.to_le_bytes());
+
+    // Send Request to AESM daemon
+    stream.write_all(&buf_wrtr)?;
+    stream.flush()?;
+
+    // Receive Response
+    let mut res_len_bytes = [0u8; 4];
+    stream.read_exact(&mut res_len_bytes)?;
+    let res_len = u32::from_le_bytes(res_len_bytes);
+
+    let mut res_bytes = vec![0; res_len as usize];
+    stream.read_exact(&mut res_bytes)?;
+
+    // Parse Response and extract Quote
+    let mut pb_msg: Response = protobuf::parse_from_bytes(&res_bytes)?;
+    let res: Response_GetQuoteSizeExResponse = pb_msg.take_getQuoteSizeExRes();
+    if res.get_errorCode() != 0 {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "Error found in Quote Size. Error code: {:?}",
+                res.get_errorCode()
+            ),
+        ));
+    }
+
+    let size = res.get_quote_size();
+    if size == 0 {
+        panic!("Could not get quote size");
+    }
+
+    Ok(size as usize)
+}
+
 /// Fills the Quote obtained from the AESMD for the Report specified into
 /// the output buffer specified and returns the number of bytes written.
-fn get_quote(report: &[u8], out_buf: &mut [u8]) -> Result<usize, std::io::Error> {
+fn get_quote(report: &[u8], size: usize, akid: Vec<u8>, out_buf: &mut [u8]) -> Result<usize, std::io::Error> {
     assert_eq!(
         out_buf.len(),
         SGX_QUOTE_SIZE,
@@ -176,13 +241,12 @@ fn get_quote(report: &[u8], out_buf: &mut [u8]) -> Result<usize, std::io::Error>
         }
     };
 
-    // Get Quote Size
-
     // Set a Get Quote Request
     let mut req = Request::new();
     let mut msg = Request_GetQuoteExRequest::new();
     msg.set_report(report[0..432].to_vec());
-    msg.set_buf_size(1277);
+    msg.set_att_key_id(akid);
+    msg.set_buf_size(size as u32);
     msg.set_timeout(1_000_000);
     req.set_getQuoteExReq(msg);
 
@@ -258,8 +322,12 @@ pub fn get_attestation(
         assert!(!akid.is_empty());
         get_ti(out_buf, akid)
     } else {
+        let akid = get_ak_id(out_buf).unwrap();
+        assert!(!akid.is_empty());
+        let size = get_quote_size(akid.clone()).unwrap();
+        assert!(size != 0);
         let report: &[u8] = unsafe { from_raw_parts(nonce as *const u8, nonce_len) };
-        get_quote(report, out_buf)
+        get_quote(report, size, akid, out_buf)
     }
 }
 
