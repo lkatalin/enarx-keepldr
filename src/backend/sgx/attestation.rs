@@ -359,18 +359,10 @@ pub fn get_attestation(
         let akid = get_ak_id(out_buf).unwrap();
         assert!(!akid.is_empty());
         println!("{:?}", akid.clone());
-        //let akid = [0, 0, 0, 0, 32, 0, 140, 79, 87, 117, 215, 150, 80, 62, 150, 19, 127, 119, 198, 138, 130, 154, 0, 86, 172, 141, 237, 112, 20, 11, 8, 27, 9, 68, 144, 197, 123, 255].to_vec();
         let size = get_quote_size(akid.clone()).unwrap();
         assert!(size != 0);
-//        get_ti(out_buf, akid.clone());
         let report: &[u8] = unsafe { from_raw_parts(nonce as *const u8, nonce_len) };
-//        for i in 0..6000 {
-//            println!("ITERATION: {:?}", i);
-        get_quote(report, i, akid.clone(), out_buf)
-//            if !r.is_err() {
-//                println!("SUCCESS");
-//            }
-        }
+        get_quote(report, size, akid.clone(), out_buf)
     }
 }
 
