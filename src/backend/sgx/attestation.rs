@@ -19,6 +19,42 @@ use protobuf::Message;
 
 const AESM_SOCKET: &str = "/var/run/aesmd/aesm.socket";
 
+const AK_ID_LIST: [u8; 264] = [
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x8c, 0x4f,
+    0x57, 0x75, 0xd7, 0x96, 0x50, 0x3e, 0x96, 0x13,
+    0x7f, 0x77, 0xc6, 0x8a, 0x82, 0x9a, 0x00, 0x56,
+    0xac, 0x8d, 0xed, 0x70, 0x14, 0x0b, 0x08, 0x1b,
+    0x09, 0x44, 0x90, 0xc5, 0x7b, 0xff, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+];
+
 fn get_ak_id(out_buf: &mut [u8]) -> Result<Vec<u8>, Error> {
 
     // If unable to connect to the AESM daemon, return dummy value
@@ -34,6 +70,7 @@ fn get_ak_id(out_buf: &mut [u8]) -> Result<Vec<u8>, Error> {
     let mut req = Request::new();
     let mut msg = Request_SelectAttKeyIDRequest::new();
     msg.set_timeout(1_000_000);
+    msg.set_att_key_id_list(AK_ID_LIST.to_vec());
     req.set_selectAttKeyIDReq(msg);
     
     // Set up Writer
@@ -67,22 +104,16 @@ fn get_ak_id(out_buf: &mut [u8]) -> Result<Vec<u8>, Error> {
     let mut pb_msg: Response = protobuf::parse_from_bytes(&res_bytes)?;
     let mut res: Response_SelectAttKeyIDResponse = pb_msg.take_selectAttKeyIDRes();
 
-    // The error code is zero here, but that's not supposed to be one of the error codes?
-    if res.has_errorCode() && (res.get_errorCode() != 1u32) && (res.get_errorCode() != 0u32) {
+    if res.get_errorCode() != 0 {
         panic!("Received error code {:?} in Select Att Key ID Response", res.get_errorCode());
     }
 
     let attkeyid = res.take_selected_att_key_id();
 
     assert!(attkeyid != &[]);
+    println!("Attestation Key ID found successfully");
+
     Ok(attkeyid)
-
-//    stream.flush()?;
-
-//    stream.shutdown(Shutdown::Both);
-
-//    assert_eq!(0, 7);
-
 }
 
 /// Fills the Target Info of the QE into the output buffer specified and
@@ -121,8 +152,6 @@ fn get_ti(out_buf: &mut [u8], akid: Vec<u8>) -> Result<usize, Error> {
 
     let req_len = (buf_wrtr.len() - size_of::<u32>()) as u32;
     (&mut buf_wrtr[0..size_of::<u32>()]).copy_from_slice(&req_len.to_le_bytes());
-
-//    assert_eq!(0, 8);
     
     // Send Request to AESM daemon
     stream.write_all(&buf_wrtr)?;
@@ -140,11 +169,9 @@ fn get_ti(out_buf: &mut [u8], akid: Vec<u8>) -> Result<usize, Error> {
     let mut pb_msg: Response = protobuf::parse_from_bytes(&res_bytes)?;
     let res: Response_InitQuoteExResponse = pb_msg.take_initQuoteExRes();
 
-    if res.has_errorCode() && (res.get_errorCode() != 1u32 && res.get_errorCode() != 0u32) {
+    if res.get_errorCode() != 0 {
         panic!("Init Quote Ex Reponse has error code: {}", res.get_errorCode());
     }
-
-//    assert_eq!(res.get_errorCode(), 1u32);
 
     let ti = res.get_target_info();
 
@@ -155,6 +182,7 @@ fn get_ti(out_buf: &mut [u8], akid: Vec<u8>) -> Result<usize, Error> {
     );
 
     out_buf.copy_from_slice(ti);
+    println!("TargetInfo obtained and Init succeeded.");
     Ok(ti.len())
 }
 
@@ -171,7 +199,7 @@ fn get_quote_size(akid: Vec<u8>) -> Result<usize, std::io::Error> {
     // Set a Get Quote Size Ex Request
     let mut req = Request::new();
     let mut msg = Request_GetQuoteSizeExRequest::new();
-    msg.set_att_key_id(akid);
+    msg.set_att_key_id(akid.clone());
     msg.set_timeout(1_000_000);
     req.set_getQuoteSizeExReq(msg);
 
@@ -190,6 +218,9 @@ fn get_quote_size(akid: Vec<u8>) -> Result<usize, std::io::Error> {
     let req_len = (buf_wrtr.len() - size_of::<u32>()) as u32;
     (&mut buf_wrtr[0..size_of::<u32>()]).copy_from_slice(&req_len.to_le_bytes());
 
+//    let mut o = [0u8; 512];
+//    get_ti(&mut o, akid.clone());
+
     // Send Request to AESM daemon
     stream.write_all(&buf_wrtr)?;
     stream.flush()?;
@@ -202,7 +233,7 @@ fn get_quote_size(akid: Vec<u8>) -> Result<usize, std::io::Error> {
     let mut res_bytes = vec![0; res_len as usize];
     stream.read_exact(&mut res_bytes)?;
 
-    // Parse Response and extract Quote
+    // Parse Response and extract Quote Size
     let mut pb_msg: Response = protobuf::parse_from_bytes(&res_bytes)?;
     let res: Response_GetQuoteSizeExResponse = pb_msg.take_getQuoteSizeExRes();
     if res.get_errorCode() != 0 {
@@ -219,6 +250,8 @@ fn get_quote_size(akid: Vec<u8>) -> Result<usize, std::io::Error> {
     if size == 0 {
         panic!("Could not get quote size");
     }
+
+    println!("Quote size found successfully: {:?}", size);
 
     Ok(size as usize)
 }
@@ -320,14 +353,24 @@ pub fn get_attestation(
     if nonce == 0 {
         let akid = get_ak_id(out_buf).unwrap();
         assert!(!akid.is_empty());
+        println!("{:?}", akid.clone());
         get_ti(out_buf, akid)
     } else {
         let akid = get_ak_id(out_buf).unwrap();
         assert!(!akid.is_empty());
+        println!("{:?}", akid.clone());
+        //let akid = [0, 0, 0, 0, 32, 0, 140, 79, 87, 117, 215, 150, 80, 62, 150, 19, 127, 119, 198, 138, 130, 154, 0, 86, 172, 141, 237, 112, 20, 11, 8, 27, 9, 68, 144, 197, 123, 255].to_vec();
         let size = get_quote_size(akid.clone()).unwrap();
         assert!(size != 0);
+//        get_ti(out_buf, akid.clone());
         let report: &[u8] = unsafe { from_raw_parts(nonce as *const u8, nonce_len) };
-        get_quote(report, size, akid, out_buf)
+//        for i in 0..6000 {
+//            println!("ITERATION: {:?}", i);
+        get_quote(report, i, akid.clone(), out_buf)
+//            if !r.is_err() {
+//                println!("SUCCESS");
+//            }
+        }
     }
 }
 
