@@ -391,8 +391,8 @@ fn get_quote(report: &[u8], size: usize, akid: Vec<u8>, out_buf: &mut [u8]) -> R
 
     assert_eq!(quote.len(), out_buf.len(), "Unable to copy Quote to buffer");
     out_buf.copy_from_slice(&quote);
-    println!("quote len: {:?}", quote.len());
-    println!("quote:\n {:?}", quote);
+    eprintln!("quote len: {:?}", quote.len());
+    eprintln!("quote:\n {:?}", quote);
     std::process::exit(0);
 
     Ok(quote.len())
