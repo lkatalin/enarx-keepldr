@@ -111,14 +111,72 @@ fn get_ak_id(out_buf: &mut [u8]) -> Result<Vec<u8>, Error> {
     let attkeyid = res.take_selected_att_key_id();
 
     assert!(attkeyid != &[]);
-    println!("Attestation Key ID found successfully");
+    eprintln!("Attestation Key ID found successfully");
 
     Ok(attkeyid)
 }
 
+fn get_key_size(akid: Vec<u8>) -> Result<u64, Error> {
+    // If unable to connect to the AESM daemon, return dummy value
+    let mut stream = match UnixStream::connect(AESM_SOCKET) {
+        Ok(s) => s,
+        Err(_) => {
+            return Ok(0);
+        }
+    };
+
+    // Set an Init Quote Ex Request
+    let mut req = Request::new();
+    let mut msg = Request_InitQuoteExRequest::new();
+    msg.set_timeout(1_000_000);
+    msg.set_b_pub_key_id(false);
+    msg.set_att_key_id(akid);
+    req.set_initQuoteExReq(msg);
+
+    // Set up Writer
+    let mut buf_wrtr = vec![0u8; size_of::<u32>()];
+    match req.write_to_writer(&mut buf_wrtr) {
+        Ok(_) => {}
+        Err(e) => {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!("Invalid Init Quote Ex Request: {:#?}", e),
+            ));
+        }
+    }
+
+    let req_len = (buf_wrtr.len() - size_of::<u32>()) as u32;
+    (&mut buf_wrtr[0..size_of::<u32>()]).copy_from_slice(&req_len.to_le_bytes());
+
+    // Send Request to AESM daemon
+    stream.write_all(&buf_wrtr)?;
+    stream.flush()?;
+
+    // Receive Response
+    let mut res_len_bytes = [0u8; 4];
+    stream.read_exact(&mut res_len_bytes)?;
+    let res_len = u32::from_le_bytes(res_len_bytes);
+
+    let mut res_bytes = vec![0; res_len as usize];
+    stream.read_exact(&mut res_bytes)?;
+
+    // Parse Response and extract TargetInfo
+    let mut pb_msg: Response = protobuf::parse_from_bytes(&res_bytes)?;
+    let res: Response_InitQuoteExResponse = pb_msg.take_initQuoteExRes();
+
+    if res.get_errorCode() != 0 {
+        panic!(
+            "Init Quote Ex Reponse has error code: {}",
+            res.get_errorCode()
+        );
+    }
+
+    Ok(res.get_pub_key_id_size())
+}
+
 /// Fills the Target Info of the QE into the output buffer specified and
 /// returns the number of bytes written.
-fn get_ti(out_buf: &mut [u8], akid: Vec<u8>) -> Result<usize, Error> {
+fn get_ti(out_buf: &mut [u8], akid: Vec<u8>, size: u64) -> Result<usize, Error> {
     assert_eq!(out_buf.len(), SGX_TI_SIZE, "Invalid size of output buffer");
 
     // If unable to connect to the AESM daemon, return dummy value
@@ -134,7 +192,8 @@ fn get_ti(out_buf: &mut [u8], akid: Vec<u8>) -> Result<usize, Error> {
     let mut req = Request::new();
     let mut msg = Request_InitQuoteExRequest::new();
     msg.set_timeout(1_000_000);
-    msg.set_b_pub_key_id(false);
+    msg.set_b_pub_key_id(true);
+    msg.set_buf_size(size);
     msg.set_att_key_id(akid);
     req.set_initQuoteExReq(msg);
 
@@ -278,7 +337,7 @@ fn get_quote(report: &[u8], size: usize, akid: Vec<u8>, out_buf: &mut [u8]) -> R
     let mut req = Request::new();
     let mut msg = Request_GetQuoteExRequest::new();
     msg.set_report(report[0..432].to_vec());
-    msg.set_att_key_id(akid);
+    msg.set_att_key_id(akid); // not including this "optional" field results in Invalid Parameter error
     msg.set_buf_size(size as u32);
     msg.set_timeout(1_000_000);
     req.set_getQuoteExReq(msg);
@@ -317,7 +376,7 @@ fn get_quote(report: &[u8], size: usize, akid: Vec<u8>, out_buf: &mut [u8]) -> R
         return Err(Error::new(
             ErrorKind::InvalidData,
             format!(
-                "Error found in Quote. Error code: {:?}",
+                "Error found in Quote. Error code: {:x?}",
                 res.get_errorCode()
             ),
         ));
@@ -348,13 +407,16 @@ pub fn get_attestation(
     buf: usize,
     buf_len: usize,
 ) -> Result<usize, Error> {
+
     let out_buf: &mut [u8] = unsafe { from_raw_parts_mut(buf as *mut u8, buf_len) };
 
     if nonce == 0 {
         let akid = get_ak_id(out_buf).unwrap();
         assert!(!akid.is_empty());
         println!("{:?}", akid.clone());
-        get_ti(out_buf, akid)
+        let pkeysize = get_key_size(akid.clone()).unwrap();
+        get_ti(out_buf, akid.clone(), pkeysize)
+
     } else {
         let akid = get_ak_id(out_buf).unwrap();
         assert!(!akid.is_empty());
